@@ -332,19 +332,23 @@ echo "Saved to crux_url_history.json"`;
     <div style={{ fontFamily: "'DM Sans',system-ui,sans-serif", background: "#fafaf8", minHeight: "100vh", color: "#1a1a2e" }}>
       <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
 
-      <div style={{ background: "#1a1a2e", color: "#fff", padding: "24px 28px 20px", borderBottom: "3px solid #d4230f" }}>
-        <div style={{ fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase", color: "#666", marginBottom: 4, fontWeight: 500 }}>Core Web Vitals</div>
-        <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>CrUX Explorer</h1>
-        <div style={{ fontSize: 12, color: "#888", marginTop: 6, fontFamily: "'DM Mono',monospace" }}>PSI · CrUX API · BigQuery</div>
+      <div style={{ background: "#1a1a2e", borderBottom: "3px solid #d4230f" }}>
+        <div style={{ maxWidth: 960, margin: "0 auto", padding: "24px 28px 20px", color: "#fff" }}>
+          <div style={{ fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase", color: "#666", marginBottom: 4, fontWeight: 500 }}>Core Web Vitals</div>
+          <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>CrUX Explorer</h1>
+          <div style={{ fontSize: 12, color: "#888", marginTop: 6, fontFamily: "'DM Mono',monospace" }}>PSI · CrUX API · BigQuery</div>
+        </div>
       </div>
 
-      <div style={{ display: "flex", borderBottom: "1px solid #e0e0dc", background: "#fff", overflowX: "auto" }}>
-        {tabBtn("urlLookup", "① CrUX API Lookup")}
-        {tabBtn("psi", "② PageSpeed Insights")}
-        {tabBtn("bigquery", "③ BigQuery SQL")}
+      <div style={{ borderBottom: "1px solid #e0e0dc", background: "#fff" }}>
+        <div style={{ maxWidth: 960, margin: "0 auto", display: "flex", overflowX: "auto" }}>
+          {tabBtn("urlLookup", "① CrUX API Lookup")}
+          {tabBtn("psi", "② PageSpeed Insights")}
+          {tabBtn("bigquery", "③ BigQuery SQL")}
+        </div>
       </div>
 
-      <div style={{ padding: "20px 28px", maxWidth: 960 }}>
+      <div style={{ padding: "20px 28px", maxWidth: 960, margin: "0 auto" }}>
 
         {/* ============ PSI ============ */}
         {tab === "psi" && (
