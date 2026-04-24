@@ -177,6 +177,24 @@ function CopyBlock({ text, copied, onCopy, maxHeight = 260 }) {
   );
 }
 
+function InfoTooltip({ children }) {
+  const [open, setOpen] = useState(false);
+  const timeoutRef = useRef(null);
+  const show = () => { clearTimeout(timeoutRef.current); setOpen(true); };
+  const hide = () => { timeoutRef.current = setTimeout(() => setOpen(false), 150); };
+  return (
+    <span style={{ position: "relative", display: "inline-block", marginLeft: 6, marginTop: "-3px", verticalAlign: "top" }}
+      onMouseEnter={show} onMouseLeave={hide}>
+      <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 14, height: 14, borderRadius: "50%", background: "#d0d0cc", color: "#666", fontSize: 10, fontWeight: 700, cursor: "help" }}>?</span>
+      {open && (
+        <span onMouseEnter={show} onMouseLeave={hide} style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, width: 260, background: "#1a1a2e", color: "#fff", padding: "10px 12px", borderRadius: 4, fontSize: 11, fontWeight: 400, letterSpacing: 0, textTransform: "none", lineHeight: 1.5, zIndex: 10, fontFamily: "'DM Sans',system-ui,sans-serif", boxShadow: "0 2px 8px rgba(0,0,0,0.15)" }}>
+          {children}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function Dashboard() {
   const [tab, setTab] = useState("urlLookup");
   const [psiJson, setPsiJson] = useState("");
@@ -428,7 +446,13 @@ echo "Saved to crux_url_history.json"`;
                 style={{ width: "100%", padding: "10px 14px", border: "1px solid #d0d0cc", borderRadius: 4, fontSize: 12, fontFamily: "'DM Mono',monospace", boxSizing: "border-box" }} />
             </div>
             <div style={{ marginBottom: 16 }}>
-              <label style={{ display: "block", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "#888", marginBottom: 6 }}>CrUX API Key</label>
+              <label style={{ display: "block", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "#888", marginBottom: 6 }}>
+                CrUX API Key
+                <InfoTooltip>
+                  You'll need a Google Cloud API key with the CrUX API enabled.{" "}
+                  <a href="https://console.cloud.google.com/apis/credentials/wizard?api=chromeuxreport.googleapis.com" target="_blank" rel="noopener" style={{ color: "#7cc4ff" }}>Generate one here ↗</a>
+                </InfoTooltip>
+              </label>
               <input type="text" value={urlApiKey} onChange={e => setUrlApiKey(e.target.value)} placeholder="AIzaSy..."
                 style={{ width: "100%", padding: "10px 14px", border: "1px solid #d0d0cc", borderRadius: 4, fontSize: 12, fontFamily: "'DM Mono',monospace", boxSizing: "border-box" }} />
             </div>
