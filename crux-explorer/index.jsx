@@ -98,6 +98,13 @@ const FORM_FACTORS_PSI = [
   { value: "desktop", label: "Desktop" },
 ];
 
+const LOOKUP_MODES = [
+  { value: "single", label: "Single URL" },
+  { value: "sitemap", label: "Sitemap / Feed" },
+];
+
+const BATCH_METRICS = ["interaction_to_next_paint", "largest_contentful_paint", "cumulative_layout_shift"];
+
 function FormFactorSelect({ value, onChange, options }) {
   return (
     <div style={{ display: "flex", gap: 0, borderRadius: 4, overflow: "hidden", border: "1px solid #d0d0cc" }}>
@@ -195,6 +202,211 @@ function InfoTooltip({ children }) {
   );
 }
 
+function BatchResults({ data }) {
+  const [sortKey, setSortKey] = useState(null);
+  const [sortDir, setSortDir] = useState("asc");
+
+  const rows = (data.batch || []).map(entry => {
+    const metrics = entry.response?.record?.metrics || {};
+    const getP75 = m => {
+      const v = metrics[m]?.percentiles?.p75;
+      return v == null ? null : parseFloat(v);
+    };
+    return {
+      url: entry.url,
+      hasData: !!entry.response?.record?.metrics,
+      errorMsg: entry.response?.error?.message || null,
+      inp: getP75("interaction_to_next_paint"),
+      lcp: getP75("largest_contentful_paint"),
+      cls: getP75("cumulative_layout_shift"),
+    };
+  });
+
+  const withData = rows.filter(r => r.hasData);
+  const withoutData = rows.length - withData.length;
+
+  const SHORT_KEYS = { interaction_to_next_paint: "inp", largest_contentful_paint: "lcp", cumulative_layout_shift: "cls" };
+
+  const metricStats = BATCH_METRICS.map(mKey => {
+    const shortKey = SHORT_KEYS[mKey];
+    const vals = withData.map(r => r[shortKey]).filter(v => v != null);
+    const count = vals.length;
+    if (!count) return { mKey, shortKey, count: 0, good: 0, ni: 0, poor: 0, avg: null, median: null };
+    const srt = [...vals].sort((a, b) => a - b);
+    const median = srt.length % 2 === 0 ? (srt[srt.length / 2 - 1] + srt[srt.length / 2]) / 2 : srt[Math.floor(srt.length / 2)];
+    const avg = vals.reduce((s, v) => s + v, 0) / count;
+    let good = 0, ni = 0, poor = 0;
+    vals.forEach(v => {
+      const s = status(mKey, v);
+      if (s === "good") good++; else if (s === "ni") ni++; else if (s === "poor") poor++;
+    });
+    return { mKey, shortKey, count, good, ni, poor, avg, median };
+  });
+
+  const urlStatuses = withData.map(r => {
+    const ss = BATCH_METRICS.map(m => r[SHORT_KEYS[m]] == null ? null : status(m, r[SHORT_KEYS[m]])).filter(s => s != null);
+    if (!ss.length) return "unknown";
+    if (ss.some(s => s === "poor")) return "poor";
+    if (ss.some(s => s === "ni")) return "ni";
+    return "good";
+  });
+  const overallGood = urlStatuses.filter(s => s === "good").length;
+  const overallNi = urlStatuses.filter(s => s === "ni").length;
+  const overallPoor = urlStatuses.filter(s => s === "poor").length;
+
+  const scVerdict = (() => {
+    if (withData.length === 0) {
+      return { key: "unknown", label: "Not enough data", color: SC.unknown, text: "No URLs returned CrUX data, so Search Console impact can't be predicted from this batch." };
+    }
+    const passRate = overallGood / withData.length;
+    const poorRate = overallPoor / withData.length;
+    if (passRate >= 0.75) {
+      return { key: "good", label: "Likely passing CWV", color: SC.good, text: `${overallGood} of ${withData.length} URLs (${Math.round(passRate * 100)}%) pass Core Web Vitals on all three metrics. Search Console should report these URLs as Good.` };
+    }
+    if (poorRate >= 0.25) {
+      return { key: "poor", label: "Likely flagged in Search Console", color: SC.poor, text: `${overallPoor} URLs (${Math.round(poorRate * 100)}%) have at least one metric in the Poor zone. Search Console groups those as "Poor URLs" — expect the CWV report to show an issue for these.` };
+    }
+    return { key: "ni", label: "Mixed — some URLs need improvement", color: SC.ni, text: `${overallNi + overallPoor} URLs (${Math.round((overallNi + overallPoor) / withData.length * 100)}%) fall short of CWV on at least one metric. Search Console will likely show a mix of "Needs improvement" and "Poor" groups.` };
+  })();
+
+  const sorted = sortKey ? [...rows].sort((a, b) => {
+    const av = a[sortKey], bv = b[sortKey];
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    if (sortKey === "url") return sortDir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
+    return sortDir === "asc" ? av - bv : bv - av;
+  }) : rows;
+
+  const toggleSort = k => {
+    if (sortKey === k) setSortDir(d => d === "asc" ? "desc" : "asc");
+    else { setSortKey(k); setSortDir("asc"); }
+  };
+
+  const headerCell = (k, label, align = "left") => (
+    <th onClick={() => toggleSort(k)} style={{ textAlign: align, padding: "8px 10px", fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "#888", cursor: "pointer", borderBottom: "1px solid #e0e0dc", userSelect: "none", whiteSpace: "nowrap" }}>
+      {label}{sortKey === k && <span style={{ marginLeft: 4 }}>{sortDir === "asc" ? "▲" : "▼"}</span>}
+    </th>
+  );
+
+  const metricCell = (metricKey, val) => {
+    if (val == null) return <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: "'DM Mono',monospace", color: "#ccc", fontSize: 12 }}>—</td>;
+    const s = status(metricKey, val);
+    const display = metricKey.includes("layout") ? val.toFixed(2) : Math.round(val).toLocaleString();
+    return <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: "'DM Mono',monospace", background: SB[s], color: SC[s], fontWeight: 600, fontSize: 12 }}>{display}</td>;
+  };
+
+  const fmtVal = (mKey, v) => {
+    if (v == null) return "—";
+    return mKey.includes("layout") ? v.toFixed(2) : Math.round(v).toLocaleString();
+  };
+
+  const verdictBg = scVerdict.key === "good" ? SB.good : scVerdict.key === "ni" ? SB.ni : scVerdict.key === "poor" ? SB.poor : "#f5f5f3";
+
+  return (
+    <div style={{ marginTop: 16 }}>
+      <div style={{ background: verdictBg, border: `1px solid ${scVerdict.color}33`, borderLeft: `3px solid ${scVerdict.color}`, borderRadius: 6, padding: "14px 18px", marginBottom: 12 }}>
+        <div style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "#888", marginBottom: 4 }}>Search Console Outlook</div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: scVerdict.color, marginBottom: 4 }}>{scVerdict.label}</div>
+        <div style={{ fontSize: 12, color: "#555", lineHeight: 1.6 }}>{scVerdict.text}</div>
+        {withData.length > 0 && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ display: "flex", height: 6, borderRadius: 3, overflow: "hidden" }}>
+              <div style={{ width: `${overallGood / withData.length * 100}%`, background: SC.good }} />
+              <div style={{ width: `${overallNi / withData.length * 100}%`, background: SC.ni }} />
+              <div style={{ width: `${overallPoor / withData.length * 100}%`, background: SC.poor }} />
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, marginTop: 4, fontFamily: "'DM Mono',monospace" }}>
+              <span style={{ color: SC.good }}>{overallGood} good ({Math.round(overallGood / withData.length * 100)}%)</span>
+              <span style={{ color: SC.ni }}>{overallNi} needs improvement ({Math.round(overallNi / withData.length * 100)}%)</span>
+              <span style={{ color: SC.poor }}>{overallPoor} poor ({Math.round(overallPoor / withData.length * 100)}%)</span>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 12 }}>
+        {metricStats.map(st => {
+          const label = METRIC_LABELS[st.mKey];
+          const unit = METRIC_UNITS[st.mKey];
+          const pG = st.count ? st.good / st.count : 0;
+          const pN = st.count ? st.ni / st.count : 0;
+          const pP = st.count ? st.poor / st.count : 0;
+          const cardColor = st.count === 0 ? SC.unknown : pG >= 0.75 ? SC.good : pP >= 0.25 ? SC.poor : SC.ni;
+          const cardBg = st.count === 0 ? "#f5f5f3" : pG >= 0.75 ? SB.good : pP >= 0.25 ? SB.poor : SB.ni;
+          return (
+            <div key={st.mKey} style={{ background: cardBg, border: `1px solid ${cardColor}33`, borderLeft: `3px solid ${cardColor}`, borderRadius: 6, padding: "12px 14px" }}>
+              <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: "0.04em", color: "#1a1a2e", marginBottom: 8 }}>
+                {label}
+                {st.count > 0 && (() => {
+                  const maxPct = Math.max(pG, pN, pP);
+                  const maxLabel = pG >= pN && pG >= pP ? "Good" : pN >= pP ? "Needs Improvement" : "Poor";
+                  const maxColor = pG >= pN && pG >= pP ? SC.good : pN >= pP ? SC.ni : SC.poor;
+                  return (
+                    <span style={{ fontSize: 12, fontWeight: 500, color: maxColor, marginLeft: 6, letterSpacing: 0 }}>- {Math.round(maxPct * 100)}% {maxLabel}</span>
+                  );
+                })()}
+              </div>
+              {st.count === 0 ? (
+                <div style={{ fontSize: 12, color: "#aaa" }}>No data</div>
+              ) : (
+                <>
+                  <div style={{ display: "flex", height: 6, borderRadius: 3, overflow: "hidden", marginBottom: 4 }}>
+                    <div style={{ width: `${pG * 100}%`, background: SC.good }} />
+                    <div style={{ width: `${pN * 100}%`, background: SC.ni }} />
+                    <div style={{ width: `${pP * 100}%`, background: SC.poor }} />
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, fontFamily: "'DM Mono',monospace", marginBottom: 10 }}>
+                    <span style={{ color: SC.good }}>{st.good} ({Math.round(pG * 100)}%)</span>
+                    <span style={{ color: SC.ni }}>{st.ni} ({Math.round(pN * 100)}%)</span>
+                    <span style={{ color: SC.poor }}>{st.poor} ({Math.round(pP * 100)}%)</span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#666", borderTop: "1px solid rgba(0,0,0,0.06)", paddingTop: 6 }}>
+                    <span>avg <span style={{ fontFamily: "'DM Mono',monospace", fontWeight: 600, color: "#1a1a2e", marginLeft: 4 }}>{fmtVal(st.mKey, st.avg)}{unit}</span></span>
+                    <span>median <span style={{ fontFamily: "'DM Mono',monospace", fontWeight: 600, color: "#1a1a2e", marginLeft: 4 }}>{fmtVal(st.mKey, st.median)}{unit}</span></span>
+                  </div>
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ fontSize: 11, color: "#888", marginBottom: 8, fontFamily: "'DM Mono',monospace" }}>
+        {rows.length} URLs queried · {withData.length} with data · {withoutData} no data
+      </div>
+
+      <div style={{ background: "#fff", border: "1px solid #e0e0dc", borderRadius: 6, overflow: "hidden" }}>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr>
+                {headerCell("url", "URL")}
+                {headerCell("inp", "INP", "right")}
+                {headerCell("lcp", "LCP", "right")}
+                {headerCell("cls", "CLS", "right")}
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((r, i) => (
+                <tr key={i} style={{ borderBottom: i === sorted.length - 1 ? "none" : "1px solid #f0f0ec" }}>
+                  <td style={{ padding: "8px 10px", fontSize: 11, fontFamily: "'DM Mono',monospace", maxWidth: 420, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <a href={r.url} target="_blank" rel="noopener" style={{ color: r.hasData ? "#1a1a2e" : "#aaa", textDecoration: "none" }} title={r.url}>{r.url}</a>
+                    {!r.hasData && r.errorMsg && <span style={{ marginLeft: 6, fontSize: 10, color: "#d48c00" }}>({r.errorMsg.split(":")[0]})</span>}
+                  </td>
+                  {metricCell("interaction_to_next_paint", r.inp)}
+                  {metricCell("largest_contentful_paint", r.lcp)}
+                  {metricCell("cumulative_layout_shift", r.cls)}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Dashboard() {
   const [tab, setTab] = useState("urlLookup");
   const [psiJson, setPsiJson] = useState("");
@@ -228,6 +440,11 @@ function Dashboard() {
   const [urlHistoryJson, setUrlHistoryJson] = useState("");
   const [urlHistoryData, setUrlHistoryData] = useState(null);
   const [urlHistoryErr, setUrlHistoryErr] = useState(null);
+  const [lookupMode, setLookupMode] = useState("single");
+  const [sitemapUrl, setSitemapUrl] = useState("");
+  const [batchJson, setBatchJson] = useState("");
+  const [batchData, setBatchData] = useState(null);
+  const [batchErr, setBatchErr] = useState(null);
   const urlCanvasRefs = useRef({});
 
   const copy = (text, id) => { setCopied(p => ({ ...p, [id]: true })); setTimeout(() => setCopied(p => ({ ...p, [id]: false })), 3000); };
@@ -257,6 +474,85 @@ function Dashboard() {
       if (!d?.record?.metrics) throw new Error("Invalid CrUX History response — missing record.metrics. If you got a NOT_FOUND error, this URL doesn't have enough traffic for CrUX.");
       setUrlHistoryData(d);
     } catch (e) { setUrlHistoryErr(e.message); }
+  };
+
+  const parseBatch = () => {
+    setBatchErr(null);
+    try {
+      const d = JSON.parse(batchJson);
+      if (!Array.isArray(d?.batch)) throw new Error("Invalid batch response — expected a top-level \"batch\" array. Run the generated script and paste the contents of crux_batch.json here.");
+      if (d.batch.length === 0) throw new Error("Batch is empty — the script didn't find any URLs in that sitemap/feed.");
+      setBatchData(d);
+    } catch (e) { setBatchErr(e.message); }
+  };
+
+  const sitemapScript = (sm, k, ff) => {
+    const ffLine = ff === "ALL" ? "" : `,\\\"formFactor\\\":\\\"${ff}\\\"`;
+    return `#!/bin/bash
+# CrUX Batch Lookup — fetches URLs from a sitemap/feed and queries CrUX for each
+# Save as crux_batch.sh, then: chmod +x crux_batch.sh && ./crux_batch.sh
+set -e
+
+SITEMAP="${sm || "https://www.example.com/sitemap.xml"}"
+API_KEY="${k || "YOUR_API_KEY"}"
+MAX_URLS=100
+OUTPUT="crux_batch.json"
+UA="Mozilla/5.0 (crux-explorer batch lookup)"
+
+echo "Fetching: $SITEMAP"
+CONTENT=$(curl -sL -A "$UA" "$SITEMAP")
+
+# Sitemap index? Recurse one level.
+if echo "$CONTENT" | grep -q "<sitemapindex"; then
+  echo "Sitemap index detected — fetching up to 5 child sitemaps..."
+  CHILDREN=$(echo "$CONTENT" | grep -oE '<loc>[^<]+</loc>' | sed -E 's/<\\/?loc>//g' | head -n 5)
+  ALL=""
+  while IFS= read -r C; do
+    [ -z "$C" ] && continue
+    echo "  → $C"
+    CC=$(curl -sL -A "$UA" "$C")
+    ALL="$ALL"$'\\n'"$(echo "$CC" | grep -oE '<loc>[^<]+</loc>' | sed -E 's/<\\/?loc>//g')"
+  done <<< "$CHILDREN"
+  URLS=$(echo "$ALL" | grep -v '^$' | head -n $MAX_URLS)
+else
+  # Try <loc> first (sitemap), then <link href="..."> (Atom), then <link>...</link> (RSS).
+  URLS=$(echo "$CONTENT" | grep -oE '<loc>[^<]+</loc>' | sed -E 's/<\\/?loc>//g' | head -n $MAX_URLS)
+  if [ -z "$URLS" ]; then
+    URLS=$(echo "$CONTENT" | grep -oE '<link[^>]+href="[^"]+"' | sed -E 's/.*href="([^"]+)".*/\\1/' | head -n $MAX_URLS)
+  fi
+  if [ -z "$URLS" ]; then
+    URLS=$(echo "$CONTENT" | grep -oE '<link>[^<]+</link>' | sed -E 's/<\\/?link>//g' | head -n $MAX_URLS)
+  fi
+fi
+
+COUNT=$(echo "$URLS" | grep -vc '^$' || true)
+if [ "$COUNT" -eq 0 ]; then
+  echo "No URLs found. Check the sitemap/feed URL and try again."
+  exit 1
+fi
+echo "Found $COUNT URLs. Querying CrUX API..."
+
+echo '{"batch":[' > "$OUTPUT"
+FIRST=true
+i=0
+while IFS= read -r URL; do
+  [ -z "$URL" ] && continue
+  i=$((i+1))
+  printf '[%d/%d] %s\\n' "$i" "$COUNT" "$URL"
+  [ "$FIRST" = false ] && echo ',' >> "$OUTPUT"
+  FIRST=false
+  PAYLOAD="{\\"url\\":\\"$URL\\"${ffLine}}"
+  RESPONSE=$(curl -s -X POST \\
+    "https://chromeuxreport.googleapis.com/v1/records:queryRecord?key=$API_KEY" \\
+    -H 'Content-Type: application/json' \\
+    -d "$PAYLOAD")
+  printf '{"url":"%s","response":%s}' "$URL" "$RESPONSE" >> "$OUTPUT"
+  sleep 0.3
+done <<< "$URLS"
+echo ']}' >> "$OUTPUT"
+
+echo ""
+echo "✓ Done — paste the contents of $OUTPUT into the dashboard to visualize."`;
   };
 
   const urlSnapshotCurl = (u, k, ff) => {
@@ -436,15 +732,9 @@ echo "Saved to crux_url_history.json"`;
         {tab === "urlLookup" && (
           <div>
             <div style={{ background: "#fff", border: "1px solid #e0e0dc", borderRadius: 6, padding: "16px 20px", marginBottom: 16, fontSize: 13, color: "#555", lineHeight: 1.7 }}>
-              <strong>CrUX API Lookup:</strong> Enter any URL or origin to generate curl commands for both a current snapshot and 40-week history. Only URLs with sufficient Chrome traffic will have data — if you get a NOT_FOUND error, the URL doesn't meet CrUX's inclusion threshold.
+              <strong>CrUX API Lookup:</strong> Query field data for a single URL, or batch-query up to 100 URLs pulled from a sitemap or feed. Only URLs with sufficient Chrome traffic will have data — URLs without it return NOT_FOUND.
             </div>
 
-            {/* URL + API Key inputs */}
-            <div style={{ marginBottom: 16 }}>
-              <label style={{ display: "block", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "#888", marginBottom: 6 }}>URL to look up</label>
-              <input type="text" value={urlInput} onChange={e => setUrlInput(e.target.value)} placeholder="https://www.mywebsite.com/some-article"
-                style={{ width: "100%", padding: "10px 14px", border: "1px solid #d0d0cc", borderRadius: 4, fontSize: 12, fontFamily: "'DM Mono',monospace", boxSizing: "border-box" }} />
-            </div>
             <div style={{ marginBottom: 16 }}>
               <label style={{ display: "block", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "#888", marginBottom: 6 }}>
                 CrUX API Key
@@ -456,11 +746,33 @@ echo "Saved to crux_url_history.json"`;
               <input type="text" value={urlApiKey} onChange={e => setUrlApiKey(e.target.value)} placeholder="AIzaSy..."
                 style={{ width: "100%", padding: "10px 14px", border: "1px solid #d0d0cc", borderRadius: 4, fontSize: 12, fontFamily: "'DM Mono',monospace", boxSizing: "border-box" }} />
             </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ display: "block", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "#888", marginBottom: 6 }}>Lookup Mode</label>
+              <FormFactorSelect value={lookupMode} onChange={setLookupMode} options={LOOKUP_MODES} />
+            </div>
+
+            {lookupMode === "single" ? (
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ display: "block", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "#888", marginBottom: 6 }}>URL to look up</label>
+                <input type="text" value={urlInput} onChange={e => setUrlInput(e.target.value)} placeholder="https://www.mywebsite.com/some-article"
+                  style={{ width: "100%", padding: "10px 14px", border: "1px solid #d0d0cc", borderRadius: 4, fontSize: 12, fontFamily: "'DM Mono',monospace", boxSizing: "border-box" }} />
+              </div>
+            ) : (
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ display: "block", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "#888", marginBottom: 6 }}>Sitemap or Feed URL</label>
+                <input type="text" value={sitemapUrl} onChange={e => setSitemapUrl(e.target.value)} placeholder="https://www.mywebsite.com/sitemap.xml"
+                  style={{ width: "100%", padding: "10px 14px", border: "1px solid #d0d0cc", borderRadius: 4, fontSize: 12, fontFamily: "'DM Mono',monospace", boxSizing: "border-box" }} />
+                <div style={{ fontSize: 11, color: "#888", marginTop: 4 }}>Works with XML sitemaps (and sitemap indexes), RSS, and Atom feeds. Capped at 100 URLs.</div>
+              </div>
+            )}
+
             <div style={{ marginBottom: 16 }}>
               <label style={{ display: "block", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "#888", marginBottom: 6 }}>Form Factor</label>
               <FormFactorSelect value={urlFormFactor} onChange={setUrlFormFactor} options={FORM_FACTORS_CRUX} />
             </div>
 
+            {lookupMode === "single" && (<>
             {/* Snapshot section */}
             <div style={{ marginBottom: 28 }}>
               <h3 style={{ fontSize: 14, fontWeight: 600, margin: "0 0 8px", display: "flex", alignItems: "center", gap: 8 }}>
@@ -547,6 +859,30 @@ echo "Saved to crux_url_history.json"`;
                 </div>
               )}
             </div>
+            </>)}
+
+            {lookupMode === "sitemap" && (
+              <div>
+                <h3 style={{ fontSize: 14, fontWeight: 600, margin: "0 0 8px", display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ background: "#1a1a2e", color: "#fff", fontSize: 10, padding: "2px 8px", borderRadius: 3, fontWeight: 600 }}>A</span>
+                  Batch Snapshot from Sitemap / Feed
+                </h3>
+                <div style={{ fontSize: 12, color: "#666", marginBottom: 12, lineHeight: 1.6 }}>
+                  Copy the script below, save it as <code style={{ background: "#eee", padding: "1px 5px", borderRadius: 3, fontFamily: "'DM Mono',monospace" }}>crux_batch.sh</code>, make it executable, and run it. It fetches the sitemap, extracts up to 100 URLs, queries CrUX for each, and writes <code style={{ background: "#eee", padding: "1px 5px", borderRadius: 3, fontFamily: "'DM Mono',monospace" }}>crux_batch.json</code>.
+                </div>
+
+                <CopyBlock text={sitemapScript(sitemapUrl, urlApiKey, urlFormFactor)} copied={copied.batch} onCopy={() => copy(sitemapScript(sitemapUrl, urlApiKey, urlFormFactor), "batch")} maxHeight={400} />
+
+                <label style={{ display: "block", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "#888", marginBottom: 6 }}>Paste crux_batch.json here:</label>
+                <textarea value={batchJson} onChange={e => setBatchJson(e.target.value)} placeholder='{"batch":[{"url":"...","response":{"record":{...}}}, ...]}'
+                  style={{ width: "100%", height: 100, padding: "10px 14px", border: "1px solid #d0d0cc", borderRadius: 4, fontSize: 11, fontFamily: "'DM Mono',monospace", resize: "vertical", boxSizing: "border-box" }} />
+                <button onClick={parseBatch} style={{ marginTop: 8, padding: "8px 20px", background: "#1a1a2e", color: "#fff", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "inherit" }}>Visualize Batch</button>
+
+                {batchErr && <div style={{ background: "rgba(212,35,15,0.06)", border: "1px solid rgba(212,35,15,0.2)", borderRadius: 4, padding: "10px 14px", fontSize: 12, color: "#d4230f", marginTop: 12 }}>{batchErr}</div>}
+
+                {batchData && <BatchResults data={batchData} />}
+              </div>
+            )}
 
             <div style={{ marginTop: 20, background: "rgba(212,140,0,0.06)", border: "1px solid rgba(212,140,0,0.2)", borderRadius: 6, padding: "12px 16px", fontSize: 12, color: "#666", lineHeight: 1.7 }}>
               <strong style={{ color: "#d48c00" }}>Note:</strong> URL-level CrUX data is only available for pages with sufficient Chrome traffic. If you get a NOT_FOUND error, fall back to the origin-level data in tabs ①–② or use lab tools (DevTools, WebPageTest) for that specific page.
