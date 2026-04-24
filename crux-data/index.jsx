@@ -24,7 +24,7 @@ function generateBqSql(origin, testUrl, months, device) {
   });
   const deviceFilter = device === "all" ? "" : `\n  AND device = '${device}'`;
   const deviceLabel = device === "all" ? "all devices" : device;
-  return `-- CrUX BigQuery: ${origin} CWV — ${monthLabels[0]}–${monthLabels[monthLabels.length - 1]} (${deviceLabel})
+  const main = `-- CrUX BigQuery: ${origin} CWV — ${monthLabels[0]}–${monthLabels[monthLabels.length - 1]} (${deviceLabel})
 -- Run at: https://console.cloud.google.com/bigquery
 -- Note: The most recent month's table may not exist yet
 -- (CrUX monthly tables release on the 2nd Tuesday after month ends)
@@ -39,10 +39,12 @@ SELECT
 FROM \`chrome-ux-report.materialized.device_summary\`
 WHERE origin = '${origin}'${deviceFilter}
   AND yyyymm IN (${inClause})
-ORDER BY yyyymm;
+ORDER BY yyyymm;`;
 
+  const trimmedUrl = testUrl?.trim();
+  if (!trimmedUrl) return main;
 
--- BONUS: Compare specific article URL vs origin
+  const bonus = `-- BONUS: Compare specific article URL vs origin
 SELECT
   yyyymm,
   IF(url = origin, 'ORIGIN', 'ARTICLE') AS scope,
@@ -51,10 +53,12 @@ SELECT
 FROM \`chrome-ux-report.materialized.device_summary\`
 WHERE (
     origin = '${origin}'
-    OR url = '${testUrl}'
+    OR url = '${trimmedUrl}'
   )${deviceFilter}
   AND yyyymm IN (${inClause})
 ORDER BY yyyymm, scope;`;
+
+  return `${main}\n\n\n${bonus}`;
 }
 
 const BQ_DEVICES = [
@@ -329,9 +333,9 @@ echo "Saved to crux_url_history.json"`;
       <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
 
       <div style={{ background: "#1a1a2e", color: "#fff", padding: "24px 28px 20px", borderBottom: "3px solid #d4230f" }}>
-        <div style={{ fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase", color: "#666", marginBottom: 4, fontWeight: 500 }}>CWV Investigation · Step 7</div>
-        <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>Core Web Vitals — Origin Analysis</h1>
-        <div style={{ fontSize: 12, color: "#888", marginTop: 6, fontFamily: "'DM Mono',monospace" }}>{ORIGIN} · <span style={{ color: "#d48c00" }}>CWV Investigation</span></div>
+        <div style={{ fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase", color: "#666", marginBottom: 4, fontWeight: 500 }}>Core Web Vitals</div>
+        <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>CrUX Explorer</h1>
+        <div style={{ fontSize: 12, color: "#888", marginTop: 6, fontFamily: "'DM Mono',monospace" }}>PSI · CrUX API · BigQuery</div>
       </div>
 
       <div style={{ display: "flex", borderBottom: "1px solid #e0e0dc", background: "#fff", overflowX: "auto" }}>
